@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>REFLEX ROULETTE | School Fest</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --accent: #38bdf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --gold: #fbbf24;
+        }
+
+        body {
+            margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg); color: white;
+            display: flex; align-items: center; justify-content: center;
+            height: 100vh; overflow: hidden;
+        }
+
+        #game-container {
+            width: 90%; max-width: 600px; text-align: center;
+            padding: 2rem; border-radius: 20px; background: var(--card);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5); border: 2px solid #334155;
+        }
+
+        .screen { display: none; }
+        .active { display: block; animation: fadeIn 0.3s; }
+
+        input {
+            padding: 15px; font-size: 1.2rem; border-radius: 10px; border: none;
+            width: 80%; margin: 20px 0; text-align: center; background: #334155; color: white;
+        }
+
+        button {
+            padding: 15px 40px; font-size: 1.2rem; cursor: pointer;
+            background: var(--accent); color: white; border: none;
+            border-radius: 10px; font-weight: bold; transition: 0.2s; margin: 10px;
+        }
+
+        button:hover { transform: scale(1.05); filter: brightness(1.2); }
+        .btn-reset { background: transparent; border: 1px solid #475569; color: #94a3b8; font-size: 0.8rem; padding: 10px 20px; }
+
+        .game-box {
+            width: 100%; height: 250px; border-radius: 15px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 4rem; font-weight: 800; cursor: pointer;
+            user-select: none; margin-top: 20px; transition: 0.1s;
+        }
+
+        .wait { background: #334155; color: #94a3b8; }
+        .go { background: var(--success); color: white; box-shadow: 0 0 50px var(--success); }
+        .trap { background: var(--danger); color: white; box-shadow: 0 0 50px var(--danger); }
+
+        .shake { animation: shake 0.2s infinite; }
+        @keyframes shake {
+            0% { transform: translate(1px, 1px) rotate(0deg); }
+            20% { transform: translate(-3px, 0px) rotate(-1deg); }
+            40% { transform: translate(3px, 2px) rotate(1deg); }
+            100% { transform: translate(1px, -2px) rotate(-1deg); }
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        .leaderboard-table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+        .leaderboard-table th, .leaderboard-table td { padding: 10px; border-bottom: 1px solid #334155; }
+        .winner-row { background: rgba(251, 191, 36, 0.2); color: var(--gold); font-weight: bold; }
+    </style>
+</head>
+<body onkeydown="handleGlobalKey(event)">
+
+    <div id="game-container">
+        <div id="setup-screen" class="screen active">
+            <h1>🎯 Reflex Roulette</h1>
+            <p>Group Progress: Participant <span id="p-count">1</span> of 10</p>
+            <input type="text" id="player-name" placeholder="ENTER NAME..." maxlength="10">
+            <br>
+            <button onclick="startPlayerSession()">START ROUNDS</button>
+        </div>
+
+        <div id="play-screen" class="screen">
+            <h2 id="round-indicator">ROUND 1/10</h2>
+            <div id="action-box" class="game-box wait" onmousedown="handleAction()">WAIT...</div>
+            <p id="feedback" style="margin-top:20px; height: 1.5rem; color: var(--accent); font-weight: bold;"></p>
+        </div>
+
+        <div id="result-screen" class="screen">
+            <h1 id="final-winner-title">🏆 GROUP RESULTS</h1>
+            <table class="leaderboard-table">
+                <thead>
+                    <tr><th>Rank</th><th>Name</th><th>Avg React</th></tr>
+                </thead>
+                <tbody id="leader-body"></tbody>
+            </table>
+            <br>
+            <button id="next-player-btn" onclick="nextPlayer()">NEXT PARTICIPANT</button>
+            <button class="btn-reset" onclick="resetWholeGame()">RESET ALL (New Group)</button>
+        </div>
+    </div>
+
+    <script>
+        // --- AUDIO ENGINE ---
+        let audioCtx;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playBeep(freq, duration, type = "sine") {
+            if(!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.type = type; osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.start(); osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // --- GAME LOGIC ---
+        let participants = [];
+        let currentPName = "";
+        let rounds = [];
+        let roundCount = 0;
+        let gameState = "idle"; 
+        let startTime, timer;
+
+        function startPlayerSession() {
+            initAudio(); // Initialize audio on user gesture
+            currentPName = document.getElementById('player-name').value.trim();
+            if(!currentPName) {
+                alert("Please enter a name first!");
+                return;
+            }
+            rounds = [];
+            roundCount = 1;
+            showScreen('play-screen');
+            setTimeout(startRound, 500);
+        }
+
+        function startRound() {
+            gameState = "waiting";
+            document.getElementById('round-indicator').innerText = ROUND ${roundCount}/10;
+            const box = document.getElementById('action-box');
+            box.className = "game-box wait";
+            box.innerText = "WAIT...";
+            document.getElementById('feedback').innerText = "";
+
+            const delay = 1200 + Math.random() * 3000;
+            const isTrap = Math.random() < 0.20; // 20% Trap chance
+
+            timer = setTimeout(() => {
+                if (isTrap) {
+                    gameState = "trap";
+                    box.className = "game-box trap shake";
+                    box.innerText = "DON'T CLICK!";
+                    playBeep(150, 0.4, "sawtooth");
+                    // If they don't click within 1.2s, they are safe
+                    timer = setTimeout(() => { 
+                        if(gameState === "trap") endRound(0, "SAFE! (0s penalty)"); 
+                    }, 1200);
+                } else {
+                    gameState = "go";
+                    box.className = "game-box go";
+                    box.innerText = "CLICK!";
+                    playBeep(880, 0.1);
+                    startTime = Date.now();
+                }
+            }, delay);
+        }
+
+        function handleAction() {
+            if (gameState === "waiting") {
+                clearTimeout(timer);
+                playBeep(100, 0.3, "square");
+                endRound(1.5, "TOO EARLY! (+1.5s)");
+            } else if (gameState === "trap") {
+                clearTimeout(timer);
+                gameState = "idle";
+                playBeep(100, 0.3, "square");
+                endRound(1.5, "TRAPPED! (+1.5s)");
+            } else if (gameState === "go") {
+                const diff = (Date.now() - startTime) / 1000;
+                gameState = "idle";
+                playBeep(1200, 0.1);
+                endRound(diff, ${diff.toFixed(3)}s);
+            }
+        }
+
+        function endRound(score, msg) {
+            gameState = "idle";
+            rounds.push(score);
+            document.getElementById('feedback').innerText = msg;
+            
+            setTimeout(() => {
+                if (roundCount < 10) {
+                    roundCount++;
+                    startRound();
+                } else {
+                    finishParticipant();
+                }
+            }, 1000);
+        }
+
+        function finishParticipant() {
+            const avg = rounds.reduce((a, b) => a + b, 0) / 10;
+            participants.push({ name: currentPName, score: avg.toFixed(3) });
+            updateLeaderboard();
+            showScreen('result-screen');
+        }
+
+        function updateLeaderboard() {
+            const list = [...participants].sort((a, b) => a.score - b.score);
+            const tbody = document.getElementById('leader-body');
+            tbody.innerHTML = "";
+            
+            list.forEach((p, i) => {
+                const row = `<tr class="${i === 0 ? 'winner-row' : ''}">
+                    <td>${i + 1}</td><td>${p.name}</td><td>${p.score}s</td>
+                </tr>`;
+                tbody.insertAdjacentHTML('beforeend', row);
+            });
+
+            if (participants.length >= 10) {
+                document.getElementById('next-player-btn').style.display = 'none';
+                document.getElementById('final-winner-title').innerText = 👑 WINNER: ${list[0].name};
+                playBeep(600, 0.2); setTimeout(() => playBeep(900, 0.4), 150);
+            }
+        }
+
+        function nextPlayer() {
+            document.getElementById('player-name').value = "";
+            document.getElementById('p-count').innerText = participants.length + 1;
+            showScreen('setup-screen');
+        }
+
+        function resetWholeGame() {
+            if(confirm("This will clear all 10 scores. Start a new group?")) {
+                participants = [];
+                document.getElementById('next-player-btn').style.display = 'inline-block';
+                document.getElementById('final-winner-title').innerText = "🏆 GROUP RESULTS";
+                nextPlayer();
+            }
+        }
+
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+
+        function handleGlobalKey(e) {
+            if (e.code === "Space") {
+                e.preventDefault();
+                if (document.getElementById('play-screen').classList.contains('active')) handleAction();
+                if (document.getElementById('setup-screen').classList.contains('active')) startPlayerSession();
+            }
+        }
+    </script>
+</body>
+</html>
